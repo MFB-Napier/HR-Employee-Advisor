@@ -1,60 +1,159 @@
 package com.napier.hr.employee.advisor;
 
+import org.apache.commons.cli.*;
+
+import java.io.IOException;
+import java.net.URL;
 import java.sql.*;
 
+/**
+ * Class containing the main static method.
+ */
 public class App
 {
-    /**
-     * Connection to MySQL database.
-     */
-    private Connection con = null;
+    // Static variable that will reference connection to database once established
+    public static Connection con = null;
+
+    // Host where world database is located
+    public static String DB_HOST = "db";  // Change to db when deploying using docker compose
+
+    // Port to connect to MySQL database
+    private static int DB_PORT = 3306;
+
+    // Login for MySQL database
+    private static final String DB_LOGIN = "root";
+
+    // Password for MySQL database
+    private static final String DB_PASSWORD = "hr-employee-advisor";
+
+    // Number of times application will attempt to connect to MySQL (will wait 30 seconds between attempts)
+    private static final int DB_CONNECTION_ATTEMPTS = 10;
+
+    public static CommandLine cmdLine;
+
 
     /**
-     * Connect to the MySQL database.
+     * Application execution starts here.
+     * In interactive mode, no arguments should be provided when executing the application.
+     * In non-interactive mode, the first argument should be the path of the XML report definition file.
+     *
+     * @param args Command line arguments
      */
-    public void connect()
+    public static void main(String[] args)
     {
+        // Manage command line options
+        Options options = new Options()
+                .addOption("host",true,"Database host (default db)")
+                .addOption("port",true,"Database port (default 3306)")
+                .addOption("reportDefinition",true,"Report XML definition")
+                .addOption("reportParameter",true,"Input parameter for selected report (if required)");
+        // Instantiate command line parser
+        DefaultParser parser = new DefaultParser();
+        // Declare CommandLine variable
+//        CommandLine cmdLine;
+        // Attempt to parse command line arguments
+        try {
+            cmdLine = parser.parse(options, args);
+        } catch (ParseException e) {
+            new HelpFormatter().printHelp("java -jar app-jar-with-dependencies.jar", options);
+            return;
+        }
+        // Change host and port is command line arguments were provided
+        if(cmdLine.hasOption("host")){
+            App.DB_HOST = cmdLine.getOptionValue("host");
+        }
+        if(cmdLine.hasOption("port")){
+            App.DB_PORT = Integer.parseInt(cmdLine.getOptionValue("port"));
+        }
+
+        // Attempt to connect to the database
+        App.connect();
+        // Was connection successful?
+        if (App.con != null) {
+            // Connection was successfully established!. If an argument was supplied (args[1]) then execute the report
+            if (cmdLine.hasOption("reportDefinition")) {
+                // Enter non-interactive mode by executing the report in args[0]
+                try {
+                    new ReportHandler(cmdLine.getOptionValue("reportDefinition"));
+                } catch (IOException e) {
+                    System.out.println("Error: File not found at path " + args[0]);
+                }
+            } else {
+                // Enter interactive mode by displaying top menu (defined in index.xml file)
+                try {
+                    // Get URL for the index.xml file in the resources directory
+                    URL indexUrl = App.class.getClassLoader().getResource("xml_config/index.xml");
+                    // Was there a problem?
+                    if (indexUrl == null) {
+                        // Display error message then exit
+                        System.out.println("Error: index.xml file was not found in the resources/xml_config directory");
+                        System.exit(-1);
+                    } else {
+                        // If there was no problem, then display the menu to the user
+                        new MenuHandler(indexUrl.toString());
+                    }
+                } catch (IOException e) {
+                    // Display IOException error message
+                    System.out.println("Error: IOException encountered while processing index.xml file");
+                }
+            }
+            // Display message before ending application
+            System.out.println("Bye!");
+            // Disconnect from database
+            App.disconnect();
+        }
+    }
+
+
+    /**
+     * Static method that attempts to connect to the MySQL database.
+     */
+    public static void connect()
+    {
+        // Attempt to load the MySQL JDBC driver
         try
         {
-            // Load Database driver
             Class.forName("com.mysql.cj.jdbc.Driver");
         }
         catch (ClassNotFoundException e)
         {
-            System.out.println("Could not load SQL driver");
+            // Display error message and exit if unable to load the JDBC driver
+            System.out.println("Error: Could not load SQL driver");
             System.exit(-1);
         }
 
-        int retries = 10;
-        for (int i = 0; i < retries; ++i)
+        // Repeatedly attempt to connect to the MySQL database (wait 30 seconds between attempts)
+        for (int i = 0; i < DB_CONNECTION_ATTEMPTS; ++i)
         {
-            System.out.println("Connecting to database...");
+            System.out.printf("Attempting to connect to database (attempt %d of %d)%n", i+1, DB_CONNECTION_ATTEMPTS);
             try
             {
-                // Wait a bit for db to start
-                Thread.sleep(30000);
                 // Connect to database
-                con = DriverManager.getConnection("jdbc:mysql://db:3306/employees?useSSL=false", "root", "example");
+                con = DriverManager.getConnection(String.format("jdbc:mysql://%s:%d/world?useSSL=false&allowPublicKeyRetrieval=true",DB_HOST,DB_PORT), DB_LOGIN, DB_PASSWORD);
                 System.out.println("Successfully connected");
+                System.out.println();
                 break;
             }
-            catch (SQLException sqle)
+            catch (SQLException e)
             {
-                System.out.println("Failed to connect to database attempt " + Integer.toString(i));
-                System.out.println(sqle.getMessage());
+                // Made less verbose by not displaying exception
             }
-            catch (InterruptedException ie)
-            {
-                System.out.println("Thread interrupted? Should not happen.");
+            // Sleep for 30 seconds before trying again to connect
+            try {
+                Thread.sleep(30000);
+            } catch (InterruptedException e) {
+                System.out.println("Error: Thread interrupted? Should not happen.");
             }
         }
     }
 
+
     /**
-     * Disconnect from the MySQL database.
+     * Static method that gracefully disconnects from the MySQL database.
      */
-    public void disconnect()
+    public static void disconnect()
     {
+        // Close MySQL connection if one was established
         if (con != null)
         {
             try
@@ -64,74 +163,8 @@ public class App
             }
             catch (Exception e)
             {
-                System.out.println("Error closing connection to database");
+                System.out.println("Error: Error encountered while closing connection to database");
             }
         }
     }
-    public static void main(String[] args)
-    {
-        // Create new Application
-        App a = new App();
-
-        // Connect to database
-        a.connect();
-        // Get Employee
-        Employee emp = a.getEmployee(255530);
-        // Display results
-        a.displayEmployee(emp);
-
-        // Disconnect from database
-        a.disconnect();
-    }
-
-    public Employee getEmployee(int ID)
-    {
-        try
-        {
-            // Create an SQL statement
-            Statement stmt = con.createStatement();
-            // Create string for SQL statement
-            String strSelect =
-                    "SELECT emp_no, first_name, last_name "
-                            + "FROM employees "
-                            + "WHERE emp_no = " + ID;
-            // Execute SQL statement
-            ResultSet rset = stmt.executeQuery(strSelect);
-            // Return new employee if valid.
-            // Check one is returned
-            if (rset.next())
-            {
-                Employee emp = new Employee();
-                emp.emp_no = rset.getInt("emp_no");
-                emp.first_name = rset.getString("first_name");
-                emp.last_name = rset.getString("last_name");
-                return emp;
-            }
-            else
-                return null;
-        }
-        catch (Exception e)
-        {
-            System.out.println(e.getMessage());
-            System.out.println("Failed to get employee details");
-            return null;
-        }
-    }
-
-    public void displayEmployee(Employee emp)
-    {
-        if (emp != null)
-        {
-            System.out.println(
-                    emp.emp_no + " "
-                            + emp.first_name + " "
-                            + emp.last_name + "\n"
-                            + emp.title + "\n"
-                            + "Salary:" + emp.salary + "\n"
-                            + emp.dept_name + "\n"
-                            + "Manager: " + emp.manager + "\n");
-        }
-    }
-
-
 }
